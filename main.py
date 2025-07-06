@@ -124,138 +124,103 @@ def authenticate_with_spotify():
         print(e.traceback);
         return None
 
+def load_liked_songs_data(spotify_client, force_refresh=False):
+    user_info = spotify_client.current_user()
+    username = user_info['display_name'].replace(' ', '-') + '-' + user_info['id']
+    liked_songs = []
+    cache_info = ""
+    if not force_refresh:
+        cached_data = load_liked_songs_from_cache(username)
+        if cached_data:
+            liked_songs, cached_at = cached_data
+            cache_info = f" (Loaded from cache: {cached_at[:10]})"
+            return liked_songs, cache_info, username
+    offset = 0
+    limit = 50
+    while True:
+        results = spotify_client.current_user_saved_tracks(limit=limit, offset=offset)
+        if not results['items']:
+            break
+        liked_songs.extend(results['items'])
+        offset += limit
+    cache_filename = save_liked_songs_to_cache(username, liked_songs)
+    if cache_filename:
+        cache_info = f" (Fresh data saved to cache: {cache_filename})"
+    else:
+        cache_info = " (Fresh data from Spotify)"
+    return liked_songs, cache_info, username
+
+def display_songs_in_window(liked_songs, scrollable_frame):
+    for widget in scrollable_frame.winfo_children():
+        widget.destroy()
+    for i, item in enumerate(liked_songs, 1):
+        track = item['track']
+        added_at = item['added_at'][:10]
+        song_frame = tk.Frame(scrollable_frame, relief=tk.RAISED, borderwidth=1)
+        song_frame.pack(fill=tk.X, pady=2, padx=5)
+        number_label = tk.Label(song_frame, text=f"{i}.", width=4, anchor="w")
+        number_label.pack(side=tk.LEFT, padx=(5, 0))
+        song_info = f"{track['name']} - {', '.join([artist['name'] for artist in track['artists']])}"
+        song_label = tk.Label(song_frame, text=song_info, anchor="w", wraplength=500)
+        song_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        album_label = tk.Label(song_frame, text=track['album']['name'], anchor="w", fg="gray", font=("Arial", 9))
+        album_label.pack(side=tk.LEFT, padx=5)
+        date_label = tk.Label(song_frame, text=added_at, anchor="w", fg="gray", font=("Arial", 9))
+        date_label.pack(side=tk.RIGHT, padx=5)
 
 def show_liked_songs(spotify_client):
-    """Display all liked songs in a scrollable window"""
     try:
-        # Get user info for caching
-        user_info = spotify_client.current_user()
-        username = user_info['display_name'].replace(' ', '-') + '-' + user_info['id']
-        
-        # Create a new window
         liked_window = tk.Toplevel()
         liked_window.title("Liked Songs")
         liked_window.geometry("800x600")
-        
-        # Create a frame for the content
         main_frame = tk.Frame(liked_window)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Create a label for the title
-        title_label = tk.Label(main_frame, text="Your Liked Songs", font=("Arial", 16, "bold"))
-        title_label.pack(pady=(0, 10))
-        
-        # Create a frame for the scrollable content
+        header_frame = tk.Frame(main_frame)
+        header_frame.pack(fill=tk.X, pady=(0, 10))
+        title_label = tk.Label(header_frame, text="Your Liked Songs", font=("Arial", 16, "bold"))
+        title_label.pack(side=tk.LEFT)
         canvas = tk.Canvas(main_frame)
         scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = tk.Frame(canvas)
-        
         scrollable_frame.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Pack the canvas and scrollbar
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        
-        # Add a loading label
-        loading_label = tk.Label(scrollable_frame, text="Loading liked songs...", font=("Arial", 12))
-        loading_label.pack(pady=20)
-        
-        # Update the window to show the loading message
-        liked_window.update()
-        
-        # Try to load from cache first
-        cached_data = load_liked_songs_from_cache(username)
-        liked_songs = []
-        cache_info = ""
-        
-        if cached_data:
-            liked_songs, cached_at = cached_data
-            cache_info = f" (Loaded from cache: {cached_at[:10]})"
-            loading_label.config(text=f"Loaded {len(liked_songs)} songs from cache...")
-            liked_window.update()
-        else:
-            # Get liked songs from Spotify API
-            loading_label.config(text="Fetching liked songs from Spotify...")
-            liked_window.update()
-            
-            offset = 0
-            limit = 50  # Spotify API limit per request
-            
-            while True:
-                results = spotify_client.current_user_saved_tracks(limit=limit, offset=offset)
-                if not results['items']:
-                    break
-                liked_songs.extend(results['items'])
-                offset += limit
-                
-                # Update loading message
-                loading_label.config(text=f"Loading liked songs... ({len(liked_songs)} loaded)")
-                liked_window.update()
-            
-            # Save to cache
-            cache_filename = save_liked_songs_to_cache(username, liked_songs)
-            if cache_filename:
-                cache_info = f" (Saved to cache: {cache_filename})"
-        
-        # Remove loading label
-        loading_label.destroy()
-        
-        # Display the songs
-        for i, item in enumerate(liked_songs, 1):
-            track = item['track']
-            added_at = item['added_at'][:10]  # Just the date part
-            
-            # Create a frame for each song
-            song_frame = tk.Frame(scrollable_frame, relief=tk.RAISED, borderwidth=1)
-            song_frame.pack(fill=tk.X, pady=2, padx=5)
-            
-            # Song number
-            number_label = tk.Label(song_frame, text=f"{i}.", width=4, anchor="w")
-            number_label.pack(side=tk.LEFT, padx=(5, 0))
-            
-            # Song info
-            song_info = f"{track['name']} - {', '.join([artist['name'] for artist in track['artists']])}"
-            song_label = tk.Label(song_frame, text=song_info, anchor="w", wraplength=500)
-            song_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-            
-            # Album name
-            album_label = tk.Label(song_frame, text=track['album']['name'], anchor="w", 
-                                 fg="gray", font=("Arial", 9))
-            album_label.pack(side=tk.LEFT, padx=5)
-            
-            # Date added
-            date_label = tk.Label(song_frame, text=added_at, anchor="w", 
-                                fg="gray", font=("Arial", 9))
-            date_label.pack(side=tk.RIGHT, padx=5)
-        
-        # Add a summary at the top
-        summary_label = tk.Label(main_frame, 
-                               text=f"Total Liked Songs: {len(liked_songs)}{cache_info}", 
-                               font=("Arial", 12, "bold"))
+        summary_label = tk.Label(main_frame, text="", font=("Arial", 12, "bold"))
         summary_label.pack(pady=(0, 10))
-        
-        # Configure mouse wheel scrolling
+        liked_window.update()
+        refresh_button = tk.Button(header_frame, text="🔄 Refresh")
+        refresh_button.pack(side=tk.RIGHT, padx=(10, 0))
+        def load_and_display_data(force_refresh=False):
+            try:
+                refresh_button.config(state=tk.DISABLED)
+                # Create a new loading label for each refresh
+                loading_label = tk.Label(scrollable_frame, text="Refreshing liked songs from Spotify..." if force_refresh else "Loading liked songs...", font=("Arial", 12))
+                loading_label.pack(pady=20)
+                liked_window.update()
+                liked_songs, cache_info, username = load_liked_songs_data(spotify_client, force_refresh)
+                loading_label.destroy()
+                display_songs_in_window(liked_songs, scrollable_frame)
+                summary_label.config(text=f"Total Liked Songs: {len(liked_songs)}{cache_info}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load liked songs: {str(e)}")
+            finally:
+                refresh_button.config(state=tk.NORMAL)
+        refresh_button.config(command=lambda: load_and_display_data(force_refresh=True))
+        load_and_display_data(force_refresh=False)
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        
-        # Unbind when window is closed
         def on_closing():
             canvas.unbind_all("<MouseWheel>")
             liked_window.destroy()
-        
         liked_window.protocol("WM_DELETE_WINDOW", on_closing)
-        
     except Exception as e:
         messagebox.showerror("Error", f"Failed to load liked songs: {str(e)}")
-
 
 def main():
     root = tk.Tk()
