@@ -8,6 +8,7 @@ import webbrowser
 import json
 from datetime import datetime
 import glob
+import csv
 
 # Load environment variables
 load_dotenv()
@@ -150,6 +151,28 @@ def load_liked_songs_data(spotify_client, force_refresh=False):
         cache_info = " (Fresh data from Spotify)"
     return liked_songs, cache_info, username
 
+def export_songs_to_csv(liked_songs, filename='liked-songs-latest.csv'):
+    """Export liked songs to CSV file"""
+    try:
+        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            # Write header
+            writer.writerow(['Song Number', 'Artist', 'Title', 'Liked Date'])
+            
+            # Write song data
+            for i, item in enumerate(liked_songs, 1):
+                track = item['track']
+                artist = ', '.join([artist['name'] for artist in track['artists']])
+                title = track['name']
+                liked_date = item['added_at'][:10]  # YYYY-MM-DD format
+                
+                writer.writerow([i, artist, title, liked_date])
+        
+        return True
+    except Exception as e:
+        print(f"Error exporting to CSV: {e}")
+        return False
+
 def display_songs_in_window(liked_songs, scrollable_frame):
     for widget in scrollable_frame.winfo_children():
         widget.destroy()
@@ -179,6 +202,10 @@ def show_liked_songs(spotify_client):
         header_frame.pack(fill=tk.X, pady=(0, 10))
         title_label = tk.Label(header_frame, text="Your Liked Songs", font=("Arial", 16, "bold"))
         title_label.pack(side=tk.LEFT)
+        
+        # Variable to store current liked songs data
+        current_liked_songs = []
+        
         canvas = tk.Canvas(main_frame)
         scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = tk.Frame(canvas)
@@ -193,23 +220,45 @@ def show_liked_songs(spotify_client):
         summary_label = tk.Label(main_frame, text="", font=("Arial", 12, "bold"))
         summary_label.pack(pady=(0, 10))
         liked_window.update()
+        
+        # Export button
+        export_button = tk.Button(header_frame, text="📄 Export CSV")
+        export_button.pack(side=tk.RIGHT, padx=(10, 0))
+        
         refresh_button = tk.Button(header_frame, text="🔄 Refresh")
         refresh_button.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        def export_to_csv():
+            if current_liked_songs:
+                if export_songs_to_csv(current_liked_songs):
+                    messagebox.showinfo("Success", f"Successfully exported {len(current_liked_songs)} songs to 'liked-songs-latest.csv'")
+                else:
+                    messagebox.showerror("Error", "Failed to export songs to CSV")
+            else:
+                messagebox.showwarning("Warning", "No songs to export. Please load your liked songs first.")
+        
+        export_button.config(command=export_to_csv)
+        
         def load_and_display_data(force_refresh=False):
             try:
                 refresh_button.config(state=tk.DISABLED)
+                export_button.config(state=tk.DISABLED)
                 # Create a new loading label for each refresh
                 loading_label = tk.Label(scrollable_frame, text="Refreshing liked songs from Spotify..." if force_refresh else "Loading liked songs...", font=("Arial", 12))
                 loading_label.pack(pady=20)
                 liked_window.update()
                 liked_songs, cache_info, username = load_liked_songs_data(spotify_client, force_refresh)
                 loading_label.destroy()
+                # Store the liked songs data for export
+                nonlocal current_liked_songs
+                current_liked_songs = liked_songs
                 display_songs_in_window(liked_songs, scrollable_frame)
                 summary_label.config(text=f"Total Liked Songs: {len(liked_songs)}{cache_info}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load liked songs: {str(e)}")
             finally:
                 refresh_button.config(state=tk.NORMAL)
+                export_button.config(state=tk.NORMAL)
         refresh_button.config(command=lambda: load_and_display_data(force_refresh=True))
         load_and_display_data(force_refresh=False)
         def _on_mousewheel(event):
