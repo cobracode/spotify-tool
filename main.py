@@ -157,7 +157,7 @@ def export_songs_to_csv(liked_songs, filename='liked-songs-latest.csv'):
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
             # Write header
-            writer.writerow(['Song Number', 'Artist', 'Title', 'Liked Date'])
+            writer.writerow(['Song Number', 'Artist', 'Title', 'Duration', 'Popularity', 'Spotify URL', 'Liked Date'])
             
             # Write song data
             for i, item in enumerate(liked_songs, 1):
@@ -166,7 +166,19 @@ def export_songs_to_csv(liked_songs, filename='liked-songs-latest.csv'):
                 title = track['name']
                 liked_date = item['added_at'][:10]  # YYYY-MM-DD format
                 
-                writer.writerow([i, artist, title, liked_date])
+                # Convert duration from milliseconds to mm:ss format
+                duration_ms = track.get('duration_ms', 0)
+                duration_minutes = duration_ms // 60000
+                duration_seconds = (duration_ms % 60000) // 1000
+                duration_formatted = f"{duration_minutes:02d}:{duration_seconds:02d}"
+                
+                # Get popularity (0-100 scale)
+                popularity = track.get('popularity', 0)
+                
+                # Get Spotify URL
+                spotify_url = track.get('external_urls', {}).get('spotify', '')
+                
+                writer.writerow([i, artist, title, duration_formatted, popularity, spotify_url, liked_date])
         
         return True
     except Exception as e:
