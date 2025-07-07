@@ -19,7 +19,7 @@ SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI')
 
 # Scope for accessing user data
-SCOPE = 'user-library-read playlist-read-private playlist-read-collaborative user-modify-playback-state user-read-playback-state playlist-modify-public playlist-modify-private'
+SCOPE = 'user-library-read playlist-read-private playlist-read-collaborative user-modify-playback-state user-read-playback-state playlist-modify-public playlist-modify-private user-top-read user-read-recently-played user-read-private'
 
 def get_cache_filename(username):
     """Generate cache filename for a user"""
@@ -301,6 +301,546 @@ def get_audio_features(spotify_client, track_ids):
         print(f"Error getting audio features: {e}")
         return None
 
+def get_artist_genres(spotify_client, artist_ids):
+    """Get genres for artists"""
+    try:
+        artists = spotify_client.artists(artist_ids)
+        return {artist['id']: artist.get('genres', []) for artist in artists['artists']}
+    except Exception as e:
+        print(f"Error getting artist genres: {e}")
+        return {}
+
+def analyze_music_taste(spotify_client, tracks, limit=50):
+    """Analyze music taste from a list of tracks"""
+    if not tracks:
+        return None
+    
+    # Limit analysis to avoid API rate limits
+    tracks_to_analyze = tracks[:limit]
+    
+    # Extract track and artist IDs
+    track_ids = [track['track']['id'] for track in tracks_to_analyze if track['track']['id']]
+    artist_ids = []
+    for track in tracks_to_analyze:
+        for artist in track['track']['artists']:
+            if artist['id'] not in artist_ids:
+                artist_ids.append(artist['id'])
+    
+    print(f"Analyzing {len(track_ids)} tracks and {len(artist_ids)} artists")
+    
+    # Try to get audio features, but don't fail if we can't
+    audio_features = []
+    feature_analysis = {}
+    
+    try:
+        # Get audio features in batches to avoid rate limits
+        batch_size = 50  # Spotify allows up to 100, but let's be conservative
+        for i in range(0, len(track_ids), batch_size):
+            batch = track_ids[i:i + batch_size]
+            try:
+                batch_features = get_audio_features(spotify_client, batch)
+                if batch_features:
+                    audio_features.extend(batch_features)
+                else:
+                    print(f"Failed to get audio features for batch {i//batch_size + 1}")
+            except Exception as e:
+                print(f"Error getting audio features for batch {i//batch_size + 1}: {e}")
+        
+        # Analyze audio features if we got any
+        if audio_features:
+            feature_names = ['danceability', 'energy', 'valence', 'tempo', 'acousticness', 
+                            'instrumentalness', 'liveness', 'speechiness']
+            
+            for feature in feature_names:
+                values = [f[feature] for f in audio_features if f and f[feature] is not None]
+                if values:
+                    feature_analysis[feature] = {
+                        'average': sum(values) / len(values),
+                        'min': min(values),
+                        'max': max(values),
+                        'count': len(values)
+                    }
+        else:
+            print("No audio features available - continuing with basic analysis")
+            
+    except Exception as e:
+        print(f"Audio features analysis failed: {e}")
+        print("Continuing with basic analysis...")
+    
+    # Get artist genres in batches
+    artist_genres = {}
+    try:
+        for i in range(0, len(artist_ids), batch_size):
+            batch = artist_ids[i:i + batch_size]
+            try:
+                batch_genres = get_artist_genres(spotify_client, batch)
+                artist_genres.update(batch_genres)
+            except Exception as e:
+                print(f"Error getting artist genres for batch {i//batch_size + 1}: {e}")
+    except Exception as e:
+        print(f"Artist genres analysis failed: {e}")
+    
+    # Analyze genres
+    genre_count = {}
+    for track in tracks_to_analyze:
+        for artist in track['track']['artists']:
+            genres = artist_genres.get(artist['id'], [])
+            for genre in genres:
+                genre_count[genre] = genre_count.get(genre, 0) + 1
+    
+    # Get top genres
+    top_genres = sorted(genre_count.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    # Analyze artists
+    artist_count = {}
+    for track in tracks_to_analyze:
+        for artist in track['track']['artists']:
+            artist_name = artist['name']
+            artist_count[artist_name] = artist_count.get(artist_name, 0) + 1
+    
+    top_artists = sorted(artist_count.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    # Analyze albums
+    album_count = {}
+    for track in tracks_to_analyze:
+        album_name = track['track']['album']['name']
+        album_count[album_name] = album_count.get(album_name, 0) + 1
+    
+    top_albums = sorted(album_count.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    # Analyze release years
+    year_count = {}
+    for track in tracks_to_analyze:
+        release_date = track['track']['album']['release_date']
+        if release_date:
+            year = release_date[:4]  # Extract year
+            year_count[year] = year_count.get(year, 0) + 1
+    
+    top_years = sorted(year_count.items(), key=lambda x: int(x[0]), reverse=True)[:10]
+    
+    return {
+        'audio_features': feature_analysis,
+        'top_genres': top_genres,
+        'top_artists': top_artists,
+        'top_albums': top_albums,
+        'top_years': top_years,
+        'total_tracks_analyzed': len(tracks_to_analyze),
+        'total_tracks': len(tracks)
+    }
+
+def get_music_taste_insights(analysis):
+    """Generate insights from music taste analysis"""
+    if not analysis:
+        return []
+    
+    insights = []
+    features = analysis['audio_features']
+    
+    # Audio features insights (only if available)
+    if features:
+        # Danceability insights
+        if 'danceability' in features:
+            dance_avg = features['danceability']['average']
+            if dance_avg > 0.7:
+                insights.append("🎵 You love danceable music! Your tracks have high danceability scores.")
+            elif dance_avg < 0.3:
+                insights.append("🎵 You prefer more laid-back, less danceable tracks.")
+            else:
+                insights.append("🎵 You have a balanced taste in danceability.")
+        
+        # Energy insights
+        if 'energy' in features:
+            energy_avg = features['energy']['average']
+            if energy_avg > 0.7:
+                insights.append("⚡ You're drawn to high-energy, energetic tracks!")
+            elif energy_avg < 0.3:
+                insights.append("🌙 You prefer calm, low-energy music.")
+            else:
+                insights.append("⚡ You enjoy a mix of energetic and calm tracks.")
+        
+        # Valence (happiness) insights
+        if 'valence' in features:
+            valence_avg = features['valence']['average']
+            if valence_avg > 0.7:
+                insights.append("😊 You love happy, positive music!")
+            elif valence_avg < 0.3:
+                insights.append("🎭 You're drawn to more melancholic, emotional tracks.")
+            else:
+                insights.append("😊 You have a balanced emotional range in your music.")
+        
+        # Acousticness insights
+        if 'acousticness' in features:
+            acoustic_avg = features['acousticness']['average']
+            if acoustic_avg > 0.7:
+                insights.append("🎸 You prefer acoustic and unplugged music.")
+            elif acoustic_avg < 0.3:
+                insights.append("🎛️ You love electronic and heavily produced music.")
+            else:
+                insights.append("🎸 You enjoy both acoustic and electronic music.")
+        
+        # Tempo insights
+        if 'tempo' in features:
+            tempo_avg = features['tempo']['average']
+            if tempo_avg > 140:
+                insights.append("🏃 You love fast-paced, high-tempo music!")
+            elif tempo_avg < 100:
+                insights.append("🐌 You prefer slower, more relaxed tempos.")
+            else:
+                insights.append("🏃 You enjoy a good mix of tempos.")
+    else:
+        insights.append("📊 Audio features analysis not available - showing basic insights only.")
+    
+    # Genre insights
+    if analysis['top_genres']:
+        top_genre = analysis['top_genres'][0][0]
+        insights.append(f"🎼 Your most common genre is: {top_genre}")
+    
+    # Artist insights
+    if analysis['top_artists']:
+        top_artist = analysis['top_artists'][0][0]
+        insights.append(f"👤 Your most listened artist is: {top_artist}")
+    
+    # Era insights
+    if analysis['top_years']:
+        recent_year = analysis['top_years'][0][0]
+        oldest_year = analysis['top_years'][-1][0]
+        if int(recent_year) - int(oldest_year) > 20:
+            insights.append("📅 You have a diverse taste spanning multiple decades!")
+        elif int(recent_year) >= 2020:
+            insights.append("📅 You mostly listen to recent music.")
+        else:
+            insights.append("📅 You appreciate music from different eras.")
+    
+    return insights
+
+def show_music_analysis(spotify_client):
+    """Show music taste analysis window"""
+    analysis_window = tk.Toplevel()
+    analysis_window.title("Music Taste Analysis")
+    analysis_window.geometry("800x700")
+    
+    main_frame = tk.Frame(analysis_window)
+    main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    
+    title_label = tk.Label(main_frame, text="Music Taste Analysis", font=("Arial", 16, "bold"))
+    title_label.pack(pady=(0, 20))
+    
+    # Analysis options frame
+    options_frame = tk.Frame(main_frame)
+    options_frame.pack(fill=tk.X, pady=(0, 20))
+    
+    tk.Label(options_frame, text="Analyze:").pack(side=tk.LEFT)
+    
+    analysis_type_var = tk.StringVar(value="liked_songs")
+    analysis_menu = tk.OptionMenu(options_frame, analysis_type_var, 
+                                "liked_songs", "recent_tracks", "top_tracks")
+    analysis_menu.pack(side=tk.LEFT, padx=(5, 10))
+    
+    limit_var = tk.IntVar(value=50)
+    tk.Label(options_frame, text="Limit:").pack(side=tk.LEFT, padx=(10, 5))
+    limit_entry = tk.Entry(options_frame, width=5, textvariable=limit_var)
+    limit_entry.pack(side=tk.LEFT, padx=(0, 10))
+    
+    # Results frame
+    results_frame = tk.Frame(main_frame)
+    results_frame.pack(fill=tk.BOTH, expand=True)
+    
+    canvas = tk.Canvas(results_frame)
+    scrollbar = ttk.Scrollbar(results_frame, orient="vertical", command=canvas.yview)
+    scrollable_frame = tk.Frame(canvas)
+    
+    scrollable_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+    
+    def perform_analysis():
+        """Perform music taste analysis"""
+        # Clear previous results
+        for widget in scrollable_frame.winfo_children():
+            widget.destroy()
+        
+        # Show loading
+        loading_label = tk.Label(scrollable_frame, text="Analyzing your music taste...", font=("Arial", 12))
+        loading_label.pack(pady=20)
+        analysis_window.update()
+        
+        try:
+            analysis_type = analysis_type_var.get()
+            limit = limit_var.get()
+            
+            # Get tracks based on analysis type
+            if analysis_type == "liked_songs":
+                tracks, _, _ = load_liked_songs_data(spotify_client, force_refresh=False)
+            elif analysis_type == "recent_tracks":
+                # Get recently played tracks
+                recent = spotify_client.current_user_recently_played(limit=limit)
+                tracks = recent['items']
+            elif analysis_type == "top_tracks":
+                # Get top tracks (short term)
+                top_tracks = spotify_client.current_user_top_tracks(limit=limit, offset=0, time_range='short_term')
+                tracks = [{'track': track} for track in top_tracks['items']]
+            else:
+                tracks = []
+            
+            if not tracks:
+                loading_label.config(text="No tracks found for analysis")
+                return
+            
+            # Perform analysis
+            analysis = analyze_music_taste(spotify_client, tracks, limit)
+            
+            if not analysis:
+                loading_label.config(text="Error performing analysis")
+                return
+            
+            loading_label.destroy()
+            
+            # Display insights
+            insights = get_music_taste_insights(analysis)
+            
+            # Insights section
+            insights_frame = tk.Frame(scrollable_frame, relief=tk.RAISED, borderwidth=2)
+            insights_frame.pack(fill=tk.X, pady=(0, 20), padx=5)
+            
+            tk.Label(insights_frame, text="🎯 Music Taste Insights", font=("Arial", 14, "bold")).pack(pady=(10, 5))
+            
+            for insight in insights:
+                insight_label = tk.Label(insights_frame, text=f"• {insight}", anchor="w", wraplength=700)
+                insight_label.pack(anchor="w", padx=10, pady=2)
+            
+            tk.Label(insights_frame, text=f"\nAnalyzed {analysis['total_tracks_analyzed']} tracks out of {analysis['total_tracks']} total", 
+                    font=("Arial", 10, "italic")).pack(pady=(10, 10))
+            
+            # Audio features section
+            if analysis['audio_features']:
+                features_frame = tk.Frame(scrollable_frame, relief=tk.RAISED, borderwidth=2)
+                features_frame.pack(fill=tk.X, pady=(0, 20), padx=5)
+                
+                tk.Label(features_frame, text="📊 Audio Features Analysis", font=("Arial", 14, "bold")).pack(pady=(10, 5))
+                
+                features_data = analysis['audio_features']
+                feature_names = {
+                    'danceability': 'Danceability',
+                    'energy': 'Energy',
+                    'valence': 'Happiness',
+                    'tempo': 'Tempo (BPM)',
+                    'acousticness': 'Acousticness',
+                    'instrumentalness': 'Instrumentalness',
+                    'liveness': 'Liveness',
+                    'speechiness': 'Speechiness'
+                }
+                
+                for feature, display_name in feature_names.items():
+                    if feature in features_data:
+                        data = features_data[feature]
+                        if feature == 'tempo':
+                            value_text = f"{data['average']:.0f} BPM"
+                        else:
+                            value_text = f"{data['average']:.2f}"
+                        
+                        feature_label = tk.Label(features_frame, 
+                                               text=f"{display_name}: {value_text}", 
+                                               anchor="w")
+                        feature_label.pack(anchor="w", padx=10, pady=2)
+            
+            # Top genres section
+            if analysis['top_genres']:
+                genres_frame = tk.Frame(scrollable_frame, relief=tk.RAISED, borderwidth=2)
+                genres_frame.pack(fill=tk.X, pady=(0, 20), padx=5)
+                
+                tk.Label(genres_frame, text="🎼 Top Genres", font=("Arial", 14, "bold")).pack(pady=(10, 5))
+                
+                for i, (genre, count) in enumerate(analysis['top_genres'][:10], 1):
+                    genre_label = tk.Label(genres_frame, 
+                                         text=f"{i}. {genre.title()} ({count} tracks)", 
+                                         anchor="w")
+                    genre_label.pack(anchor="w", padx=10, pady=2)
+            
+            # Top artists section
+            if analysis['top_artists']:
+                artists_frame = tk.Frame(scrollable_frame, relief=tk.RAISED, borderwidth=2)
+                artists_frame.pack(fill=tk.X, pady=(0, 20), padx=5)
+                
+                tk.Label(artists_frame, text="👤 Top Artists", font=("Arial", 14, "bold")).pack(pady=(10, 5))
+                
+                for i, (artist, count) in enumerate(analysis['top_artists'][:10], 1):
+                    artist_label = tk.Label(artists_frame, 
+                                          text=f"{i}. {artist} ({count} tracks)", 
+                                          anchor="w")
+                    artist_label.pack(anchor="w", padx=10, pady=2)
+            
+            # Top albums section
+            if analysis['top_albums']:
+                albums_frame = tk.Frame(scrollable_frame, relief=tk.RAISED, borderwidth=2)
+                albums_frame.pack(fill=tk.X, pady=(0, 20), padx=5)
+                
+                tk.Label(albums_frame, text="💿 Top Albums", font=("Arial", 14, "bold")).pack(pady=(10, 5))
+                
+                for i, (album, count) in enumerate(analysis['top_albums'][:10], 1):
+                    album_label = tk.Label(albums_frame, 
+                                         text=f"{i}. {album} ({count} tracks)", 
+                                         anchor="w")
+                    album_label.pack(anchor="w", padx=10, pady=2)
+            
+            # Top years section
+            if analysis['top_years']:
+                years_frame = tk.Frame(scrollable_frame, relief=tk.RAISED, borderwidth=2)
+                years_frame.pack(fill=tk.X, pady=(0, 20), padx=5)
+                
+                tk.Label(years_frame, text="📅 Top Release Years", font=("Arial", 14, "bold")).pack(pady=(10, 5))
+                
+                for i, (year, count) in enumerate(analysis['top_years'][:10], 1):
+                    year_label = tk.Label(years_frame, 
+                                        text=f"{i}. {year} ({count} tracks)", 
+                                        anchor="w")
+                    year_label.pack(anchor="w", padx=10, pady=2)
+        
+        except Exception as e:
+            error_msg = f"Error during analysis: {str(e)}"
+            print(f"DEBUG: {error_msg}")
+            loading_label.config(text=error_msg)
+    
+    analyze_button = tk.Button(options_frame, text="Analyze", command=perform_analysis)
+    analyze_button.pack(side=tk.LEFT, padx=(0, 10))
+    
+    # Add test button for debugging
+    def test_api_calls():
+        """Test individual API calls to identify the issue"""
+        try:
+            # Test 1: Get user info
+            user_info = spotify_client.current_user()
+            print(f"✓ User info: {user_info['display_name']}")
+            
+            # Test 2: Get liked songs
+            liked_songs = spotify_client.current_user_saved_tracks(limit=5)
+            print(f"✓ Liked songs: {len(liked_songs['items'])} tracks")
+            
+            # Test 3: Get audio features for one track
+            if liked_songs['items']:
+                track_id = liked_songs['items'][0]['track']['id']
+                features = spotify_client.audio_features([track_id])
+                print(f"✓ Audio features: {len(features)} features retrieved")
+            
+            # Test 4: Get artist info
+            if liked_songs['items']:
+                artist_id = liked_songs['items'][0]['track']['artists'][0]['id']
+                artists = spotify_client.artists([artist_id])
+                print(f"✓ Artist info: {artists['artists'][0]['name']}")
+            
+            # Test 5: Get top tracks
+            try:
+                top_tracks = spotify_client.current_user_top_tracks(limit=5)
+                print(f"✓ Top tracks: {len(top_tracks['items'])} tracks")
+            except Exception as e:
+                print(f"✗ Top tracks failed: {e}")
+            
+            # Test 6: Get recently played
+            try:
+                recent = spotify_client.current_user_recently_played(limit=5)
+                print(f"✓ Recently played: {len(recent['items'])} tracks")
+            except Exception as e:
+                print(f"✗ Recently played failed: {e}")
+                
+            messagebox.showinfo("API Test", "Check console for detailed results")
+            
+        except Exception as e:
+            print(f"✗ API test failed: {e}")
+            messagebox.showerror("API Test Error", str(e))
+    
+    test_button = tk.Button(options_frame, text="🔧 Test APIs", command=test_api_calls)
+    test_button.pack(side=tk.LEFT, padx=(0, 10))
+    
+    # Add export button
+    def export_analysis():
+        """Export analysis results to CSV"""
+        try:
+            analysis_type = analysis_type_var.get()
+            limit = limit_var.get()
+            
+            # Get tracks
+            if analysis_type == "liked_songs":
+                tracks, _, _ = load_liked_songs_data(spotify_client, force_refresh=False)
+            elif analysis_type == "recent_tracks":
+                recent = spotify_client.current_user_recently_played(limit=limit)
+                tracks = recent['items']
+            elif analysis_type == "top_tracks":
+                top_tracks = spotify_client.current_user_top_tracks(limit=limit, offset=0, time_range='short_term')
+                tracks = [{'track': track} for track in top_tracks['items']]
+            else:
+                tracks = []
+            
+            if not tracks:
+                messagebox.showwarning("Warning", "No tracks to analyze")
+                return
+            
+            # Perform analysis
+            analysis = analyze_music_taste(spotify_client, tracks, limit)
+            if not analysis:
+                messagebox.showerror("Error", "Failed to perform analysis")
+                return
+            
+            # Export to CSV
+            filename = f"music_analysis_{analysis_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            
+            with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                # Write summary
+                writer.writerow(['Music Taste Analysis Summary'])
+                writer.writerow(['Analysis Type', analysis_type])
+                writer.writerow(['Tracks Analyzed', analysis['total_tracks_analyzed']])
+                writer.writerow(['Total Tracks', analysis['total_tracks']])
+                writer.writerow([])
+                
+                # Write audio features
+                writer.writerow(['Audio Features'])
+                writer.writerow(['Feature', 'Average', 'Min', 'Max'])
+                for feature, data in analysis['audio_features'].items():
+                    writer.writerow([feature, f"{data['average']:.3f}", f"{data['min']:.3f}", f"{data['max']:.3f}"])
+                writer.writerow([])
+                
+                # Write top genres
+                writer.writerow(['Top Genres'])
+                writer.writerow(['Rank', 'Genre', 'Count'])
+                for i, (genre, count) in enumerate(analysis['top_genres'], 1):
+                    writer.writerow([i, genre, count])
+                writer.writerow([])
+                
+                # Write top artists
+                writer.writerow(['Top Artists'])
+                writer.writerow(['Rank', 'Artist', 'Count'])
+                for i, (artist, count) in enumerate(analysis['top_artists'], 1):
+                    writer.writerow([i, artist, count])
+                writer.writerow([])
+                
+                # Write top albums
+                writer.writerow(['Top Albums'])
+                writer.writerow(['Rank', 'Album', 'Count'])
+                for i, (album, count) in enumerate(analysis['top_albums'], 1):
+                    writer.writerow([i, album, count])
+                writer.writerow([])
+                
+                # Write top years
+                writer.writerow(['Top Release Years'])
+                writer.writerow(['Rank', 'Year', 'Count'])
+                for i, (year, count) in enumerate(analysis['top_years'], 1):
+                    writer.writerow([i, year, count])
+            
+            messagebox.showinfo("Success", f"Analysis exported to '{filename}'")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export analysis: {str(e)}")
+    
+    export_button = tk.Button(options_frame, text="📄 Export CSV", command=export_analysis)
+    export_button.pack(side=tk.LEFT)
+
 def create_playlist(spotify_client, name, description="", public=False):
     """Create a new playlist"""
     try:
@@ -352,208 +892,6 @@ def control_playback(spotify_client, action, track_uri=None):
     except Exception as e:
         print(f"Error controlling playback: {e}")
         return False
-
-def show_search_window(spotify_client):
-    """Show search window for finding tracks"""
-    search_window = tk.Toplevel()
-    search_window.title("Spotify Search")
-    search_window.geometry("600x500")
-    
-    main_frame = tk.Frame(search_window)
-    main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-    
-    # Search frame
-    search_frame = tk.Frame(main_frame)
-    search_frame.pack(fill=tk.X, pady=(0, 10))
-    
-    search_label = tk.Label(search_frame, text="Search:")
-    search_label.pack(side=tk.LEFT)
-    
-    search_entry = tk.Entry(search_frame, width=40)
-    search_entry.pack(side=tk.LEFT, padx=(5, 10))
-    
-    search_type_var = tk.StringVar(value="track")
-    search_type_menu = tk.OptionMenu(search_frame, search_type_var, "track", "artist", "album")
-    search_type_menu.pack(side=tk.LEFT, padx=(0, 10))
-    
-    # Results frame
-    results_frame = tk.Frame(main_frame)
-    results_frame.pack(fill=tk.BOTH, expand=True)
-    
-    canvas = tk.Canvas(results_frame)
-    scrollbar = ttk.Scrollbar(results_frame, orient="vertical", command=canvas.yview)
-    scrollable_frame = tk.Frame(canvas)
-    
-    scrollable_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-    
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-    
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-    
-    def perform_search():
-        query = search_entry.get().strip()
-        if not query:
-            messagebox.showwarning("Warning", "Please enter a search term")
-            return
-        
-        # Clear previous results
-        for widget in scrollable_frame.winfo_children():
-            widget.destroy()
-        
-        # Show loading
-        loading_label = tk.Label(scrollable_frame, text="Searching...", font=("Arial", 12))
-        loading_label.pack(pady=20)
-        search_window.update()
-        
-        # Perform search
-        search_type = search_type_var.get()
-        results = search_spotify(spotify_client, query, search_type, limit=20)
-        
-        loading_label.destroy()
-        
-        if not results or not results.get(f'{search_type}s', {}).get('items'):
-            no_results_label = tk.Label(scrollable_frame, text="No results found", font=("Arial", 12))
-            no_results_label.pack(pady=20)
-            return
-        
-        items = results[f'{search_type}s']['items']
-        
-        for i, item in enumerate(items, 1):
-            item_frame = tk.Frame(scrollable_frame, relief=tk.RAISED, borderwidth=1)
-            item_frame.pack(fill=tk.X, pady=2, padx=5)
-            
-            if search_type == 'track':
-                # Track info
-                track_name = item['name']
-                artists = ', '.join([artist['name'] for artist in item['artists']])
-                album = item['album']['name']
-                
-                info_text = f"{i}. {track_name} - {artists} ({album})"
-                info_label = tk.Label(item_frame, text=info_text, anchor="w", wraplength=400)
-                info_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-                
-                # Play button
-                play_button = tk.Button(item_frame, text="▶️", width=3)
-                play_button.config(command=lambda uri=item['uri']: control_playback(spotify_client, 'play', uri))
-                play_button.pack(side=tk.RIGHT, padx=5)
-                
-                # Open in Spotify button
-                open_button = tk.Button(item_frame, text="🌐", width=3)
-                open_button.config(command=lambda url=item['external_urls']['spotify']: webbrowser.open(url))
-                open_button.pack(side=tk.RIGHT, padx=2)
-                
-            elif search_type == 'artist':
-                artist_name = item['name']
-                genres = ', '.join(item.get('genres', [])[:3])  # First 3 genres
-                
-                info_text = f"{i}. {artist_name}"
-                if genres:
-                    info_text += f" - {genres}"
-                
-                info_label = tk.Label(item_frame, text=info_text, anchor="w", wraplength=400)
-                info_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-                
-                # Open in Spotify button
-                open_button = tk.Button(item_frame, text="🌐", width=3)
-                open_button.config(command=lambda url=item['external_urls']['spotify']: webbrowser.open(url))
-                open_button.pack(side=tk.RIGHT, padx=5)
-                
-            elif search_type == 'album':
-                album_name = item['name']
-                artists = ', '.join([artist['name'] for artist in item['artists']])
-                release_date = item.get('release_date', 'Unknown')
-                
-                info_text = f"{i}. {album_name} - {artists} ({release_date})"
-                info_label = tk.Label(item_frame, text=info_text, anchor="w", wraplength=400)
-                info_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-                
-                # Open in Spotify button
-                open_button = tk.Button(item_frame, text="🌐", width=3)
-                open_button.config(command=lambda url=item['external_urls']['spotify']: webbrowser.open(url))
-                open_button.pack(side=tk.RIGHT, padx=5)
-    
-    search_button = tk.Button(search_frame, text="Search", command=perform_search)
-    search_button.pack(side=tk.LEFT, padx=(0, 10))
-    
-    # Bind Enter key to search
-    search_entry.bind('<Return>', lambda e: perform_search())
-
-def show_playback_controls(spotify_client):
-    """Show playback control window"""
-    control_window = tk.Toplevel()
-    control_window.title("Playback Controls")
-    control_window.geometry("400x300")
-    
-    main_frame = tk.Frame(control_window)
-    main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-    
-    title_label = tk.Label(main_frame, text="Playback Controls", font=("Arial", 16, "bold"))
-    title_label.pack(pady=(0, 20))
-    
-    # Current track info
-    track_info_label = tk.Label(main_frame, text="No track playing", font=("Arial", 12))
-    track_info_label.pack(pady=(0, 20))
-    
-    # Control buttons
-    button_frame = tk.Frame(main_frame)
-    button_frame.pack(pady=20)
-    
-    prev_button = tk.Button(button_frame, text="⏮️ Previous", width=12, height=2)
-    prev_button.pack(side=tk.LEFT, padx=5)
-    
-    play_pause_button = tk.Button(button_frame, text="▶️ Play", width=12, height=2)
-    play_pause_button.pack(side=tk.LEFT, padx=5)
-    
-    next_button = tk.Button(button_frame, text="⏭️ Next", width=12, height=2)
-    next_button.pack(side=tk.LEFT, padx=5)
-    
-    def update_playback_info():
-        """Update current playback information"""
-        playback = get_current_playback(spotify_client)
-        if playback and playback.get('is_playing'):
-            track = playback['item']
-            if track:
-                track_name = track['name']
-                artists = ', '.join([artist['name'] for artist in track['artists']])
-                track_info_label.config(text=f"Now Playing: {track_name} - {artists}")
-                play_pause_button.config(text="⏸️ Pause")
-            else:
-                track_info_label.config(text="No track information available")
-                play_pause_button.config(text="▶️ Play")
-        else:
-            track_info_label.config(text="No track playing")
-            play_pause_button.config(text="▶️ Play")
-    
-    def toggle_play_pause():
-        """Toggle play/pause"""
-        playback = get_current_playback(spotify_client)
-        if playback and playback.get('is_playing'):
-            control_playback(spotify_client, 'pause')
-        else:
-            control_playback(spotify_client, 'play')
-        control_window.after(1000, update_playback_info)  # Update after 1 second
-    
-    # Configure button commands
-    prev_button.config(command=lambda: [control_playback(spotify_client, 'previous'), 
-                                       control_window.after(1000, update_playback_info)])
-    play_pause_button.config(command=toggle_play_pause)
-    next_button.config(command=lambda: [control_playback(spotify_client, 'next'), 
-                                       control_window.after(1000, update_playback_info)])
-    
-    # Initial update
-    update_playback_info()
-    
-    # Auto-refresh every 5 seconds
-    def auto_refresh():
-        update_playback_info()
-        control_window.after(5000, auto_refresh)
-    
-    auto_refresh()
 
 def show_playlist_manager(spotify_client):
     """Show playlist management window"""
@@ -660,7 +998,7 @@ def show_playlist_manager(spotify_client):
 def main():
     root = tk.Tk()
     root.title("Spotify Tool")
-    root.geometry("400x450")  # Made taller for new buttons
+    root.geometry("400x500")  # Made taller for new button
 
     label = tk.Label(root, text="Spotify Playlist & Liked Songs Tool", font=("Arial", 14))
     label.pack(pady=20)
@@ -678,11 +1016,13 @@ def main():
             search_button.config(state=tk.NORMAL)
             playback_button.config(state=tk.NORMAL)
             playlist_button.config(state=tk.NORMAL)
+            analysis_button.config(state=tk.NORMAL)
             test_button.pack(pady=5)
             liked_songs_button.pack(pady=5)
             search_button.pack(pady=5)
             playback_button.pack(pady=5)
             playlist_button.pack(pady=5)
+            analysis_button.pack(pady=5)
 
     def test_connection():
         if spotify_client:
@@ -719,6 +1059,12 @@ def main():
         else:
             messagebox.showerror("Error", "Please authenticate with Spotify first.")
 
+    def on_analysis_click():
+        if spotify_client:
+            show_music_analysis(spotify_client)
+        else:
+            messagebox.showerror("Error", "Please authenticate with Spotify first.")
+
     auth_button = tk.Button(root, text="Login with Spotify", command=on_auth_click)
     auth_button.pack(pady=10)
 
@@ -727,6 +1073,7 @@ def main():
     search_button = tk.Button(root, text="🔍 Search Spotify", command=on_search_click, state=tk.DISABLED)
     playback_button = tk.Button(root, text="🎵 Playback Controls", command=on_playback_click, state=tk.DISABLED)
     playlist_button = tk.Button(root, text="📋 Playlist Manager", command=on_playlist_click, state=tk.DISABLED)
+    analysis_button = tk.Button(root, text="📊 Music Taste Analysis", command=on_analysis_click, state=tk.DISABLED)
 
     root.mainloop()
 
