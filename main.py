@@ -5,7 +5,6 @@ from spotipy.oauth2 import SpotifyOAuth
 import os
 from dotenv import load_dotenv
 import webbrowser
-import json
 from datetime import datetime
 import glob
 import csv
@@ -24,12 +23,20 @@ SCOPE = 'user-library-read playlist-read-private playlist-read-collaborative use
 def get_cache_filename(username):
     """Generate cache filename for a user"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{username}-liked-songs-{timestamp}.txt"
+    return f"{username}-liked-songs-{timestamp}.csv"
 
 def get_latest_cache_file(username):
     """Get the latest cache file for a user"""
-    pattern = f"{username}-liked-songs-*.txt"
-    cache_files = glob.glob(pattern)
+    # First try to find CSV cache files (new format)
+    csv_pattern = f"{username}-liked-songs-*.csv"
+    csv_files = glob.glob(csv_pattern)
+    
+    # Also check for old TXT cache files (backward compatibility)
+    txt_pattern = f"{username}-liked-songs-*.txt"
+    txt_files = glob.glob(txt_pattern)
+    
+    # Combine both lists
+    cache_files = csv_files + txt_files
     
     if not cache_files:
         return None
@@ -45,9 +52,30 @@ def load_liked_songs_from_cache(username):
         return None
     
     try:
+        liked_songs = []
         with open(cache_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data.get('liked_songs', []), data.get('cached_at', 'Unknown')
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Convert CSV row back to Spotify API format
+                track_data = {
+                    'track': {
+                        'id': row.get('Track ID', ''),
+                        'name': row['Title'],
+                        'artists': [{'name': artist.strip()} for artist in row['Artist'].split(',')],
+                        'album': {'name': row.get('Album', 'Unknown')},
+                        'duration_ms': (int(row['Duration'].split(':')[0]) * 60 + int(row['Duration'].split(':')[1])) * 1000 if ':' in row['Duration'] else 0,
+                        'popularity': int(row['Popularity']) if row['Popularity'].isdigit() else 0,
+                        'external_urls': {'spotify': row['Spotify URL']}
+                    },
+                    'added_at': row['Liked Date'] + 'T00:00:00Z'  # Convert back to ISO format
+                }
+                liked_songs.append(track_data)
+        
+        # Get cache timestamp from filename
+        cache_timestamp = cache_file.split('-liked-songs-')[1].replace('.csv', '')
+        cached_at = f"{cache_timestamp[:4]}-{cache_timestamp[4:6]}-{cache_timestamp[6:8]}"
+        
+        return liked_songs, cached_at
     except Exception as e:
         print(f"Error loading cache file {cache_file}: {e}")
         return None
@@ -56,15 +84,34 @@ def save_liked_songs_to_cache(username, liked_songs):
     """Save liked songs to cache file"""
     try:
         cache_filename = get_cache_filename(username)
-        cache_data = {
-            'username': username,
-            'liked_songs': liked_songs,
-            'cached_at': datetime.now().isoformat(),
-            'total_songs': len(liked_songs)
-        }
         
-        with open(cache_filename, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, indent=2, ensure_ascii=False)
+        with open(cache_filename, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            # Write header
+            writer.writerow(['Song Number', 'Artist', 'Title', 'Duration', 'Popularity', 'Spotify URL', 'Liked Date', 'Album', 'Track ID'])
+            
+            # Write song data
+            for i, item in enumerate(liked_songs, 1):
+                track = item['track']
+                artist = ', '.join([artist['name'] for artist in track['artists']])
+                title = track['name']
+                liked_date = item['added_at'][:10]  # YYYY-MM-DD format
+                album = track['album']['name']
+                track_id = track.get('id', '')
+                
+                # Convert duration from milliseconds to mm:ss format
+                duration_ms = track.get('duration_ms', 0)
+                duration_minutes = duration_ms // 60000
+                duration_seconds = (duration_ms % 60000) // 1000
+                duration_formatted = f"{duration_minutes:02d}:{duration_seconds:02d}"
+                
+                # Get popularity (0-100 scale)
+                popularity = track.get('popularity', 0)
+                
+                # Get Spotify URL
+                spotify_url = track.get('external_urls', {}).get('spotify', '')
+                
+                writer.writerow([i, artist, title, duration_formatted, popularity, spotify_url, liked_date, album, track_id])
         
         return cache_filename
     except Exception as e:
@@ -157,7 +204,7 @@ def export_songs_to_csv(liked_songs, filename='liked-songs-latest.csv'):
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
             # Write header
-            writer.writerow(['Song Number', 'Artist', 'Title', 'Duration', 'Popularity', 'Spotify URL', 'Liked Date'])
+            writer.writerow(['Song Number', 'Artist', 'Title', 'Duration', 'Popularity', 'Spotify URL', 'Liked Date', 'Album', 'Track ID'])
             
             # Write song data
             for i, item in enumerate(liked_songs, 1):
@@ -165,6 +212,8 @@ def export_songs_to_csv(liked_songs, filename='liked-songs-latest.csv'):
                 artist = ', '.join([artist['name'] for artist in track['artists']])
                 title = track['name']
                 liked_date = item['added_at'][:10]  # YYYY-MM-DD format
+                album = track['album']['name']
+                track_id = track.get('id', '')
                 
                 # Convert duration from milliseconds to mm:ss format
                 duration_ms = track.get('duration_ms', 0)
@@ -178,7 +227,7 @@ def export_songs_to_csv(liked_songs, filename='liked-songs-latest.csv'):
                 # Get Spotify URL
                 spotify_url = track.get('external_urls', {}).get('spotify', '')
                 
-                writer.writerow([i, artist, title, duration_formatted, popularity, spotify_url, liked_date])
+                writer.writerow([i, artist, title, duration_formatted, popularity, spotify_url, liked_date, album, track_id])
         
         return True
     except Exception as e:
